@@ -915,6 +915,39 @@ impl PageTable {
             debug_assert_eq!(src, va.as_usize());
         }
     }
+
+    pub fn vm_print(&self, level: usize) {
+        // 根页表头只打印一次
+        if level == 0 {
+            println!("page table 0x{:x}", self as *const PageTable as usize);
+        }
+
+        for (idx, pte) in self.data.iter().enumerate() {
+            // 只打印 valid 的 PTE
+            if !pte.is_valid() {
+                continue;
+            }
+
+            // 缩进：level=0 -> ".."
+            //      level=1 -> ".. .."
+            //      level=2 -> ".. .. .."
+            let indent = (0..(level + 1))
+                .map(|_| "..")
+                .collect::<alloc::vec::Vec<_>>()
+                .join(" ");
+
+            let pa = pte.as_phys_addr().as_usize();
+
+            // pte 原值要按 0x{:x} 打出来（pte.data）
+            println!("{}{}: pte 0x{:x} pa 0x{:x}", indent, idx, pte.data, pa);
+
+            // 非叶子 PTE：继续递归打印下一级页表
+            if !pte.is_leaf() {
+                let child = unsafe { &*pte.as_page_table() };
+                child.vm_print(level + 1);
+            }
+        }
+    }
 }
 
 impl Drop for PageTable {
@@ -940,3 +973,4 @@ impl Drop for PageTable {
         self.data.iter_mut().for_each(|pte| pte.free());
     }
 }
+

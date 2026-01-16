@@ -102,6 +102,8 @@ pub struct ProcData {
     pub pagetable: Option<Box<PageTable>>,
     /// 进程当前工作目录的 inode。
     pub cwd: Option<Inode>,
+    
+    pub trace_mask: u32,
 }
 
 
@@ -116,6 +118,7 @@ impl ProcData {
             tf: ptr::null_mut(),
             pagetable: None,
             cwd: None,
+            trace_mask: 0,
         }
     }
 
@@ -283,6 +286,7 @@ impl ProcData {
             pgt.dealloc_proc_pagetable(self.sz);
         }
         self.sz = 0;
+        self.trace_mask = 0;
     }
 
     /// # 功能说明
@@ -493,6 +497,13 @@ impl Proc {
     /// - 该函数应在内核上下文且进程排他访问时调用，避免数据竞争。
     /// - 系统调用执行过程中可能包含更底层的 `unsafe`，调用此函数时需确保整体安全环境。
     pub fn syscall(&mut self) {
+        const SYSCALL_NAMES: [&str; 23] = [
+            "INVALID", // 0 占位
+            "fork", "exit", "wait", "pipe", "read", "kill", "exec", "fstat", "chdir",
+            "dup", "getpid", "sbrk", "sleep", "uptime", "open", "write", "mknod",
+            "unlink", "link", "mkdir", "close",
+            "trace",
+        ];
         sstatus::intr_on();
 
         let tf = unsafe { self.data.get_mut().tf.as_mut().unwrap() };
@@ -520,14 +531,27 @@ impl Proc {
             19 => self.sys_link(),
             20 => self.sys_mkdir(),
             21 => self.sys_close(),
+            22 => self.sys_trace(),
             _ => {
                 panic!("unknown syscall num: {}", a7);
             }
         };
-        tf.a0 = match sys_result {
-            Ok(ret) => ret,
-            Err(()) => -1isize as usize,
+        let ret_isize: isize = match sys_result {
+            Ok(ret) => ret as isize,
+            Err(()) => -1,
         };
+
+        // 判断 mask
+        let mask = self.data.get_mut().trace_mask;
+        let syscall_num = a7 as u32;
+        if syscall_num < 32 && (mask & (1u32 << syscall_num)) != 0 {
+            let pid = self.excl.lock().pid;
+            let name = SYSCALL_NAMES[a7 as usize];
+            println!("{}: syscall {} -> {}", pid, name, ret_isize);
+        }
+
+        // 最后写回 a0（注意仍要按原规则写）
+        tf.a0 = ret_isize as usize;
     }
 
     /// # 功能说明
@@ -697,6 +721,7 @@ impl Proc {
 
         unsafe { PROC_MANAGER.set_parent(child.index, self.index); }
 
+        cdata.trace_mask = pdata.trace_mask;
         let mut cexcl = child.excl.lock();
         cexcl.state = ProcState::RUNNABLE;
         drop(cexcl);

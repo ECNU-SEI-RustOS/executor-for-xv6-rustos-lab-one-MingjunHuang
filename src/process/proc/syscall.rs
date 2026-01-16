@@ -39,6 +39,7 @@ pub trait Syscall {
     fn sys_link(&mut self) -> SysResult;
     fn sys_mkdir(&mut self) -> SysResult;
     fn sys_close(&mut self) -> SysResult;
+    fn sys_trace(&mut self) -> SysResult;
 }
 
 impl Syscall for Proc {
@@ -191,6 +192,14 @@ impl Syscall for Proc {
         if result.is_err() {
             syscall_warning(error);
         }
+
+        let guard = self.excl.lock();
+        if guard.pid == 1 {
+            let data = self.data.get_mut();
+            data.pagetable.as_ref().unwrap().vm_print(0);
+        }
+        drop(guard);
+        
         result
     }
 
@@ -496,6 +505,12 @@ impl Syscall for Proc {
         println!("[{}].close(fd={}), file={:?}", self.excl.lock().pid, fd, file);
 
         drop(file);
+        Ok(0)
+    }
+    
+    fn sys_trace(&mut self) -> SysResult {
+        let mask = self.arg_i32(0);          // 或 arg_raw(0)
+        self.data.get_mut().trace_mask = mask as u32;
         Ok(0)
     }
 }
